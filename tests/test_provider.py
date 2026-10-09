@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from urllib.error import URLError
+from io import BytesIO
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -49,8 +50,65 @@ def test_openai_compatible_provider_uses_configured_endpoint_and_environment_key
     assert request.full_url == "https://provider.test/v1/chat/completions"
     assert request.get_header("Authorization") == "Bearer test-secret"
     assert observed["timeout"] == 17
-    assert json.loads(request.data)["model"] == "test-model"
+    payload = json.loads(request.data)
+    assert payload["model"] == "test-model"
+    response_format = payload["response_format"]
+    assert response_format["type"] == "json_schema"
+    schema_config = response_format["json_schema"]
+    assert schema_config["strict"] is True
+    schema = schema_config["schema"]
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    assert schema["properties"]["summary"] == {"type": "string"}
+    evidence_schema = schema["properties"]["cited_evidence"]["items"]
+    assert evidence_schema["additionalProperties"] is False
+    assert evidence_schema["required"] == ["claim", "source_path", "quote"]
+    inference_schema = schema["properties"]["inferences"]["items"]
+    assert inference_schema["additionalProperties"] is False
+    assert inference_schema["required"] == ["claim", "basis"]
     assert completion == '{"summary": "ok"}'
+
+
+def test_schema_format_incompatibility_is_clear_without_leaking_response_secrets(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TEST_PROVIDER_KEY", "provider-key-secret")
+
+    def reject_schema_format(*_args, **_kwargs):
+        raise HTTPError(
+            "https://user-secret:pass-secret@provider.test/"
+            "?token=endpoint-token-secret",
+            400,
+            "Bad Request",
+            None,
+            BytesIO(
+                b'{"error":"response_format json_schema is not supported; '
+                b'token=response-token-secret"}'
+            ),
+        )
+
+    monkeypatch.setattr("projectmesh.provider.urlopen", reject_schema_format)
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            endpoint="https://provider.test/v1/chat/completions",
+            model="test-model",
+            api_key_env="TEST_PROVIDER_KEY",
+        )
+    )
+
+    with pytest.raises(ProviderError) as error:
+        provider.complete("system", "user")
+
+    assert "does not support strict JSON Schema" in str(error.value)
+    for secret in (
+        "provider-key-secret",
+        "user-secret",
+        "pass-secret",
+        "endpoint-token-secret",
+        "response-token-secret",
+    ):
+        assert secret not in str(error.value)
 
 
 def test_provider_error_does_not_expose_endpoint_credentials_or_query_secrets(

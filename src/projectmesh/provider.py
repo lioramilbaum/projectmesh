@@ -11,8 +11,78 @@ from urllib.request import Request, urlopen
 from projectmesh.models import ProviderConfig
 
 
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "cited_evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "source_path": {"type": "string"},
+                    "quote": {"type": "string"},
+                },
+                "required": ["claim", "source_path", "quote"],
+                "additionalProperties": False,
+            },
+        },
+        "inferences": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "basis": {"type": "string"},
+                },
+                "required": ["claim", "basis"],
+                "additionalProperties": False,
+            },
+        },
+        "unsupported_claims": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "summary",
+        "cited_evidence",
+        "inferences",
+        "unsupported_claims",
+        "risks",
+        "open_questions",
+    ],
+    "additionalProperties": False,
+}
+
+
 class ProviderError(RuntimeError):
     """Raised when the configured model provider cannot complete a request."""
+
+
+def _is_schema_format_incompatibility(error: HTTPError) -> bool:
+    """Identify common responses from endpoints that reject JSON Schema mode."""
+    if error.code != 400:
+        return False
+    try:
+        response_text = error.read().decode("utf-8", errors="replace").lower()
+    except OSError:
+        return False
+    mentions_schema_mode = (
+        "json_schema" in response_text or "response_format" in response_text
+    )
+    rejects_mode = any(
+        phrase in response_text
+        for phrase in (
+            "not supported",
+            "unsupported",
+            "does not support",
+            "unrecognized",
+            "unknown parameter",
+            "invalid parameter",
+        )
+    )
+    return mentions_schema_mode and rejects_mode
 
 
 class CompletionProvider(Protocol):
@@ -40,7 +110,14 @@ class OpenAICompatibleProvider:
                     {"role": "user", "content": user_prompt},
                 ],
                 "temperature": 0,
-                "response_format": {"type": "json_object"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "projectmesh_assessment",
+                        "strict": True,
+                        "schema": _RESPONSE_SCHEMA,
+                    },
+                },
             }
         ).encode("utf-8")
         try:
@@ -56,6 +133,10 @@ class OpenAICompatibleProvider:
             with urlopen(request, timeout=self.config.timeout_seconds) as response:
                 response_data = response.read()
         except HTTPError as exc:
+            if _is_schema_format_incompatibility(exc):
+                raise ProviderError(
+                    "Configured provider does not support strict JSON Schema response format."
+                ) from None
             raise ProviderError(f"Provider returned HTTP {exc.code}.") from exc
         except (URLError, TimeoutError, OSError):
             raise ProviderError(

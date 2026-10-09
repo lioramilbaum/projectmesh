@@ -12,7 +12,7 @@ from projectmesh.cli import _report_filename, _write_report
 from projectmesh.cli import run_assessment
 from projectmesh.config import load_config
 from projectmesh.models import PROMPT_VERSION, ProviderConfig
-from projectmesh.provider import CompletionProvider
+from projectmesh.provider import CompletionProvider, ProviderError
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -97,6 +97,32 @@ class SecretEchoProvider(StubProvider):
             result["summary"] = self.secret
             return json.dumps(result)
         return response
+
+
+class ScriptedProvider(CompletionProvider):
+    def __init__(self, responses: list[str | ProviderError]) -> None:
+        self.responses = responses
+        self.prompts: list[tuple[str, str]] = []
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        self.prompts.append((system_prompt, user_prompt))
+        response = self.responses.pop(0)
+        if isinstance(response, ProviderError):
+            raise response
+        return response
+
+
+def _valid_completion(summary: str) -> str:
+    return json.dumps(
+        {
+            "summary": summary,
+            "cited_evidence": [],
+            "inferences": [],
+            "unsupported_claims": [],
+            "risks": [],
+            "open_questions": [],
+        }
+    )
 
 
 def _config_file(tmp_path: Path, project: Path) -> Path:
@@ -192,6 +218,118 @@ def test_generates_traceable_report_and_keeps_fixture_unchanged(
     assert "Capability: Implementation impact" in provider.prompts[1][1]
     assert _tree_bytes(project) == original
     assert report_path.parent == config.output_dir
+
+
+def test_recovers_from_invalid_completion_with_one_correction_attempt(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    config = load_config(_config_file(tmp_path, project))
+    provider = ScriptedProvider(
+        [
+            json.dumps({"summary": 42}),
+            _valid_completion("Recovered repository assessment."),
+            _valid_completion("Implementation impact assessment."),
+        ]
+    )
+
+    report_path = run_assessment(
+        config=config,
+        project_key="fixture",
+        feature_request="Export archived records",
+        output_dir=config.output_dir,
+        provider_factory=lambda _: provider,
+    )
+
+    assert len(provider.prompts) == 3
+    correction_prompt = provider.prompts[1][1]
+    assert "Correction required" in correction_prompt
+    assert "field 'summary' must be a string" in correction_prompt
+    assert "Recovered repository assessment." in report_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_recovers_from_completion_missing_required_field(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    config = load_config(_config_file(tmp_path, project))
+    incomplete = json.loads(_valid_completion("Incomplete repository assessment."))
+    del incomplete["risks"]
+    provider = ScriptedProvider(
+        [
+            json.dumps(incomplete),
+            _valid_completion("Corrected repository assessment."),
+            _valid_completion("Implementation impact assessment."),
+        ]
+    )
+
+    report_path = run_assessment(
+        config=config,
+        project_key="fixture",
+        feature_request="Export archived records",
+        output_dir=config.output_dir,
+        provider_factory=lambda _: provider,
+    )
+
+    assert len(provider.prompts) == 3
+    correction_prompt = provider.prompts[1][1]
+    assert "Correction required" in correction_prompt
+    assert "field 'risks' must be a list" in correction_prompt
+    assert "Corrected repository assessment." in report_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_repeated_invalid_completion_fails_after_one_retry_without_report(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    config = load_config(_config_file(tmp_path, project))
+    provider = ScriptedProvider(["not JSON", "still not JSON"])
+
+    with pytest.raises(
+        ProviderError, match="remained invalid after one correction attempt"
+    ):
+        run_assessment(
+            config=config,
+            project_key="fixture",
+            feature_request="Export archived records",
+            output_dir=config.output_dir,
+            provider_factory=lambda _: provider,
+        )
+
+    assert len(provider.prompts) == 2
+    assert "not valid JSON" in provider.prompts[1][1]
+    assert not config.output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Provider returned HTTP 503.",
+        "Could not reach the configured provider.",
+    ],
+)
+def test_provider_errors_are_not_retried_or_reported(
+    tmp_path: Path, message: str
+) -> None:
+    project = _make_project(tmp_path)
+    config = load_config(_config_file(tmp_path, project))
+    provider = ScriptedProvider([ProviderError(message)])
+
+    with pytest.raises(ProviderError, match=message):
+        run_assessment(
+            config=config,
+            project_key="fixture",
+            feature_request="Export archived records",
+            output_dir=config.output_dir,
+            provider_factory=lambda _: provider,
+        )
+
+    assert len(provider.prompts) == 1
+    assert not config.output_dir.exists()
 
 
 def test_secret_manifest_values_never_reach_provider_or_report(
