@@ -1,0 +1,16 @@
+[provider]
+endpoint = "https://api.openai.com/v1/chat/completions"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 60
+
+[projects.example-service]
+name = "Example service"
+path = "../example-service"
+
+[projects.example-library]
+name = "Example library"
+path = "../example-library"
+
+[assessment]
+output_dir = "../projectmesh-assessments"
