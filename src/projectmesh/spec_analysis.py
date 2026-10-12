@@ -18,7 +18,9 @@ def analyze_spec(
         title="Repository context and feature fit",
         purpose=(
             "Identify relevant existing components, interfaces, and patterns, "
-            "then explain how the feature request relates to them."
+            "then explain how the feature request relates to them. "
+            "State the problem statement and goals from the request, and "
+            "identify existing capabilities that relate to the goals."
         ),
         feature_request=feature_request,
         snapshot=snapshot,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-PROMPT_VERSION = "projectmesh-assessment-v1"
+PROMPT_VERSION = "projectmesh-assessment-v2"
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,10 @@ class AnalysisResult:
     unsupported_claims: tuple[str, ...]
     risks: tuple[str, ...]
     open_questions: tuple[str, ...]
+    problem_statement: str = ""
+    goals: tuple[str, ...] = ()
+    existing_capabilities: tuple[Evidence, ...] = ()
+    gaps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

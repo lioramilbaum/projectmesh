@@ -80,6 +80,18 @@ def render_markdown(
         for analysis in assessment.analyses
         for item in analysis.cited_evidence
     ]
+    existing_capabilities = [
+        f"- **Existing capability** ({item.capability}): {item.claim}\n"
+        f"  - Source: `{item.source_path}`\n"
+        f"  - Quote: `{_escape_inline_code(item.quote)}`"
+        for analysis in assessment.analyses
+        for item in analysis.existing_capabilities
+    ]
+    gaps = [
+        f"- **Gap (inference)** ({analysis.title}): {gap}"
+        for analysis in assessment.analyses
+        for gap in analysis.gaps
+    ]
     inferences = [
         f"- **Inference** ({item.capability}): {item.claim}\n"
         f"  - Basis: {item.basis}"
@@ -113,6 +125,14 @@ def render_markdown(
 
 {assessment.feature_request}
 
+## Problem statement
+
+{repository_analysis.problem_statement or "None reported."}
+
+## Goals
+
+{_bullets(repository_analysis.goals)}
+
 ## Summary
 
 {repository_analysis.summary}
@@ -124,6 +144,14 @@ def render_markdown(
 ## Implementation impact
 
 {impact_analysis.summary}
+
+## Existing capabilities
+
+{chr(10).join(existing_capabilities) if existing_capabilities else "None reported."}
+
+## Gaps
+
+{chr(10).join(gaps) if gaps else "None reported."}
 
 ## Cited evidence
 

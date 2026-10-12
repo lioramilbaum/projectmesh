@@ -36,6 +36,16 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
+def _section(report, heading):
+    marker = f"\n## {heading}\n"
+    start = report.find(marker)
+    if start == -1:
+        return ""
+    start += len(marker)
+    end = report.find("\n## ", start)
+    return report[start:end] if end != -1 else report[start:]
+
+
 class StubProvider(CompletionProvider):
     def __init__(self) -> None:
         self.prompts: list[tuple[str, str]] = []
@@ -45,6 +55,8 @@ class StubProvider(CompletionProvider):
         if "Capability: Repository context" in user_prompt:
             result = {
                 "summary": "The service describes its record storage.",
+                "problem_statement": "The system lacks X",
+                "goals": ["Enable Y", "Support Z"],
                 "cited_evidence": [
                     {
                         "claim": "The README names the record data file.",
@@ -57,6 +69,20 @@ class StubProvider(CompletionProvider):
                         "quote": "not in snapshot",
                     },
                 ],
+                "existing_capabilities": [
+                    {
+                        "claim": "Records are stored in records.json",
+                        "source_path": "README.md",
+                        "quote": "Records are stored in `records.json`.",
+                        "capability": "Repository context and feature fit",
+                    },
+                    {
+                        "claim": "This existing capability is not in the file",
+                        "source_path": "README.md",
+                        "quote": "This quote does not exist in README.md.",
+                        "capability": "Repository context and feature fit",
+                    },
+                ],
                 "inferences": [
                     {
                         "claim": "An export may reuse the record storage format.",
@@ -66,10 +92,13 @@ class StubProvider(CompletionProvider):
                 "unsupported_claims": ["The service has a REST API."],
                 "risks": ["The export format is unspecified."],
                 "open_questions": ["Which records should be included?"],
+                "gaps": [],
             }
         else:
             result = {
                 "summary": "An export could read the existing record store.",
+                "problem_statement": "",
+                "goals": [],
                 "cited_evidence": [
                     {
                         "claim": "The fixture has a records collection.",
@@ -77,10 +106,12 @@ class StubProvider(CompletionProvider):
                         "quote": '{"records": []}',
                     }
                 ],
+                "existing_capabilities": [],
                 "inferences": [],
                 "unsupported_claims": [],
                 "risks": [],
                 "open_questions": [],
+                "gaps": ["Gap: no authentication layer exists"],
             }
         return json.dumps(result)
 
@@ -116,11 +147,15 @@ def _valid_completion(summary: str) -> str:
     return json.dumps(
         {
             "summary": summary,
+            "problem_statement": "",
+            "goals": [],
             "cited_evidence": [],
+            "existing_capabilities": [],
             "inferences": [],
             "unsupported_claims": [],
             "risks": [],
             "open_questions": [],
+            "gaps": [],
         }
     )
 
@@ -181,9 +216,13 @@ def test_generates_traceable_report_and_keeps_fixture_unchanged(
     for heading in (
         "# Feature assessment:",
         "## Request",
+        "## Problem statement",
+        "## Goals",
         "## Summary",
         "## Repository context and feature fit",
         "## Implementation impact",
+        "## Existing capabilities",
+        "## Gaps",
         "## Cited evidence",
         "## Inferences",
         "## Unsupported claims",
@@ -213,6 +252,21 @@ def test_generates_traceable_report_and_keeps_fixture_unchanged(
     assert "The service has a REST API." in report
     assert "This made-up citation must be rejected." in report
     assert "citation could not be verified" in report
+    assert "The system lacks X" in _section(report, "Problem statement")
+    assert "Enable Y" in _section(report, "Goals")
+    assert "Records are stored in records.json" in _section(
+        report, "Existing capabilities"
+    )
+    assert "README.md" in _section(report, "Existing capabilities")
+    assert "Gap: no authentication layer exists" in _section(report, "Gaps")
+    assert "Gap (inference)" in _section(report, "Gaps")
+    # Demoted existing capability must not be rendered as verified
+    assert "This existing capability is not in the file" not in _section(
+        report, "Existing capabilities"
+    )
+    assert "This existing capability is not in the file" in _section(
+        report, "Unsupported claims"
+    )
     assert len(provider.prompts) == 2
     assert provider.prompts[0][1].index("Capability: Repository context") < 100
     assert "Capability: Implementation impact" in provider.prompts[1][1]
