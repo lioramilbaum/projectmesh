@@ -29,7 +29,9 @@ CLI -> TOML config -> read-only repository snapshot
   unsupported.
 - **Provider interface** exposes a minimal completion operation. The MVP
   implementation sends OpenAI-compatible chat-completions requests using
-  Python's standard library. Tests inject a local stub.
+  Python's standard library. A claude-cli adapter runs completions through the
+  local Claude Code CLI for users with a Claude Code subscription. Tests inject
+  a local stub.
 - **Renderer** renders the typed assessment model and source metadata to
   Markdown. Only this application output is written, and output inside a
   configured source repository is rejected.
@@ -54,6 +56,8 @@ assessment.
 
 Provider calls are the only network-capable operation. The configured
 endpoint receives the prompt and inspected text when an assessment runs.
+The claude-cli provider runs the local `claude` binary with tools and MCP
+disabled from a temporary working directory.
 Credentials are read from the environment and are never written to reports
 or logged. Tests replace this boundary with a stub and do not make network
 calls.

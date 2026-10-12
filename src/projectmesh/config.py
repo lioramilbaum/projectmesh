@@ -6,7 +6,13 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
 
-from projectmesh.models import AppConfig, ProjectConfig, ProviderConfig
+from projectmesh.models import (
+    AppConfig,
+    ProjectConfig,
+    ProviderConfig,
+    PROVIDER_OPENAI_COMPATIBLE,
+    PROVIDER_CLAUDE_CLI,
+)
 
 
 class ConfigError(ValueError):
@@ -57,18 +63,38 @@ def load_config(path: str | Path) -> AppConfig:
 
     _reject_unknown_keys(raw, {"provider", "projects", "assessment"}, "root")
     provider_table = _table(raw.get("provider"), "provider")
-    _reject_unknown_keys(
-        provider_table,
-        {"endpoint", "model", "api_key_env", "timeout_seconds"},
-        "provider",
-    )
-    endpoint = _required_string(provider_table, "endpoint", "provider")
-    parsed_endpoint = urlparse(endpoint)
-    if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
-        raise ConfigError("'provider.endpoint' must be an absolute HTTP(S) URL.")
-    model = _required_string(provider_table, "model", "provider")
-    api_key_env = _required_string(provider_table, "api_key_env", "provider")
-    timeout_seconds = provider_table.get("timeout_seconds", 60)
+    provider_type = provider_table.get("type", PROVIDER_OPENAI_COMPATIBLE)
+    if not isinstance(provider_type, str) or provider_type not in {
+        PROVIDER_OPENAI_COMPATIBLE,
+        PROVIDER_CLAUDE_CLI,
+    }:
+        raise ConfigError(
+            "'provider.type' must be one of: 'openai-compatible', 'claude-cli'."
+        )
+    if provider_type == PROVIDER_CLAUDE_CLI:
+        _reject_unknown_keys(
+            provider_table,
+            {"type", "model", "timeout_seconds"},
+            "provider",
+        )
+        endpoint = ""
+        api_key_env = ""
+        model = _required_string(provider_table, "model", "provider")
+        default_timeout = 300
+    else:
+        _reject_unknown_keys(
+            provider_table,
+            {"type", "endpoint", "model", "api_key_env", "timeout_seconds"},
+            "provider",
+        )
+        endpoint = _required_string(provider_table, "endpoint", "provider")
+        parsed_endpoint = urlparse(endpoint)
+        if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
+            raise ConfigError("'provider.endpoint' must be an absolute HTTP(S) URL.")
+        model = _required_string(provider_table, "model", "provider")
+        api_key_env = _required_string(provider_table, "api_key_env", "provider")
+        default_timeout = 60
+    timeout_seconds = provider_table.get("timeout_seconds", default_timeout)
     if (
         not isinstance(timeout_seconds, int)
         or isinstance(timeout_seconds, bool)
@@ -80,6 +106,7 @@ def load_config(path: str | Path) -> AppConfig:
         model=model,
         api_key_env=api_key_env,
         timeout_seconds=timeout_seconds,
+        type=provider_type,
     )
 
     projects_table = _table(raw.get("projects"), "projects")

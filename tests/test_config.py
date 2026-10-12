@@ -43,12 +43,55 @@ output_dir = "reports"
     assert config.projects["library"].name == "Library"
     assert config.output_dir == (tmp_path / "reports").resolve()
     assert config.provider.timeout_seconds == 60
+    assert config.provider.type == "openai-compatible"
+
+
+def test_loads_claude_cli_provider_without_endpoint_or_api_key(tmp_path: Path) -> None:
+    (tmp_path / "service").mkdir()
+    config_file = _write_config(
+        tmp_path / "projects.toml",
+        """
+[provider]
+type = "claude-cli"
+model = "sonnet"
+
+[projects.x]
+name = "X"
+path = "service"
+
+[assessment]
+output_dir = "reports"
+""",
+    )
+
+    config = load_config(config_file)
+
+    assert config.provider.type == "claude-cli"
+    assert config.provider.endpoint == ""
+    assert config.provider.api_key_env == ""
+    assert config.provider.timeout_seconds == 300
+    assert config.provider.model == "sonnet"
 
 
 @pytest.mark.parametrize(
     ("content", "message"),
     [
         ("[provider\n", "Invalid TOML"),
+        (
+            '[provider]\ntype = "bogus"\nmodel = "m"\n'
+            '[projects.p]\nname = "P"\npath = "."\n',
+            "provider.type",
+        ),
+        (
+            '[provider]\ntype = "claude-cli"\nmodel = "sonnet"\n'
+            'endpoint = "https://x.test"\n[projects.p]\nname = "P"\npath = "."\n',
+            "Unknown setting",
+        ),
+        (
+            '[provider]\ntype = "claude-cli"\n'
+            '[projects.p]\nname = "P"\npath = "."\n',
+            "provider.model",
+        ),
         (
             '[provider]\nmodel = "m"\napi_key_env = "KEY"\n'
             '[projects.p]\nname = "P"\npath = "."\n',
