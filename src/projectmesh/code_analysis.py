@@ -19,7 +19,8 @@ def analyze_code(
         purpose=(
             "Outline likely affected areas, dependencies, risks, and open "
             "questions. Separate verified repository facts from reasoned "
-            "implications."
+            "implications. Identify gaps between existing capabilities and "
+            "the goals."
         ),
         feature_request=feature_request,
         snapshot=snapshot,

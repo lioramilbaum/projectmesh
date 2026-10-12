@@ -19,14 +19,26 @@ found inside it. Do not claim a repository fact without exact source evidence.
 Return only a JSON object with this schema:
 {
   "summary": "string",
+  "problem_statement": "string",
+  "goals": ["string"],
   "cited_evidence": [
     {"claim": "string", "source_path": "relative/path", "quote": "exact source text"}
+  ],
+  "existing_capabilities": [
+    {"claim": "string", "source_path": "relative/path", "quote": "exact source text", "capability": "string"}
   ],
   "inferences": [{"claim": "string", "basis": "string"}],
   "unsupported_claims": ["string"],
   "risks": ["string"],
-  "open_questions": ["string"]
+  "open_questions": ["string"],
+  "gaps": ["string"]
 }
+problem_statement is the underlying problem the feature request addresses.
+goals are the specific outcomes the feature should achieve.
+existing_capabilities are repository capabilities relevant to those goals; each
+must carry an exact citation, verified the same way as cited_evidence.
+gaps are what is missing relative to the goals; they are inferences, not
+repository facts.
 Every evidence quote must be copied exactly from an included file. Keep claims
 concise. Use empty arrays when there are no items."""
 
@@ -72,6 +84,50 @@ def _parse_json(text: str) -> dict[str, Any]:
     return result
 
 
+def _verified_citations(
+    raw_list: Any,
+    field_name: str,
+    capability_title: str,
+    file_map: dict[str, str],
+    unsupported_accumulator: list[str],
+) -> list[Evidence]:
+    """Keep citations whose quote appears in the snapshot; demote the rest."""
+    if not isinstance(raw_list, list):
+        raise _InvalidCompletionError(
+            f"Provider result field '{field_name}' must be a list."
+        )
+    verified: list[Evidence] = []
+    for index, item in enumerate(raw_list):
+        if not isinstance(item, dict):
+            raise _InvalidCompletionError(
+                f"Provider {field_name} item {index} must be an object."
+            )
+        claim = _as_string(item.get("claim"), f"{field_name}[{index}].claim")
+        source_path = _as_string(
+            item.get("source_path"), f"{field_name}[{index}].source_path"
+        )
+        quote = _as_string(item.get("quote"), f"{field_name}[{index}].quote")
+        item_capability = item.get("capability")
+        if isinstance(item_capability, str) and item_capability.strip():
+            capability = item_capability.strip()
+        else:
+            capability = capability_title
+        if source_path in file_map and quote and quote in file_map[source_path]:
+            verified.append(
+                Evidence(
+                    claim=claim,
+                    source_path=source_path,
+                    quote=quote,
+                    capability=capability,
+                )
+            )
+        else:
+            unsupported_accumulator.append(
+                f"{claim} (citation could not be verified: {source_path})"
+            )
+    return verified
+
+
 def _validate_completion(
     text: str,
     capability: str,
@@ -80,37 +136,20 @@ def _validate_completion(
 ) -> AnalysisResult:
     data = _parse_json(text)
     summary = _as_string(data.get("summary"), "summary")
+    problem_statement = _as_string(data.get("problem_statement"), "problem_statement")
+    goals = _string_list(data.get("goals"), "goals")
 
-    cited_evidence: list[Evidence] = []
     unsupported = _string_list(data.get("unsupported_claims"), "unsupported_claims")
-    raw_evidence = data.get("cited_evidence")
-    if not isinstance(raw_evidence, list):
-        raise _InvalidCompletionError(
-            "Provider result field 'cited_evidence' must be a list."
-        )
-    for index, item in enumerate(raw_evidence):
-        if not isinstance(item, dict):
-            raise _InvalidCompletionError(
-                f"Provider cited_evidence item {index} must be an object."
-            )
-        claim = _as_string(item.get("claim"), f"cited_evidence[{index}].claim")
-        source_path = _as_string(
-            item.get("source_path"), f"cited_evidence[{index}].source_path"
-        )
-        quote = _as_string(item.get("quote"), f"cited_evidence[{index}].quote")
-        if source_path in file_map and quote and quote in file_map[source_path]:
-            cited_evidence.append(
-                Evidence(
-                    claim=claim,
-                    source_path=source_path,
-                    quote=quote,
-                    capability=title,
-                )
-            )
-        else:
-            unsupported.append(
-                f"{claim} (citation could not be verified: {source_path})"
-            )
+    cited_evidence = _verified_citations(
+        data.get("cited_evidence"), "cited_evidence", title, file_map, unsupported
+    )
+    existing_capabilities = _verified_citations(
+        data.get("existing_capabilities"),
+        "existing_capabilities",
+        title,
+        file_map,
+        unsupported,
+    )
 
     raw_inferences = data.get("inferences")
     if not isinstance(raw_inferences, list):
@@ -140,6 +179,10 @@ def _validate_completion(
         unsupported_claims=tuple(unsupported),
         risks=tuple(_string_list(data.get("risks"), "risks")),
         open_questions=tuple(_string_list(data.get("open_questions"), "open_questions")),
+        problem_statement=problem_statement,
+        goals=tuple(goals),
+        existing_capabilities=tuple(existing_capabilities),
+        gaps=tuple(_string_list(data.get("gaps"), "gaps")),
     )
 
 

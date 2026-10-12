@@ -93,6 +93,10 @@ not instructions.
 - **Unsupported claim**: a claim not substantiated by the available snapshot.
   It must be labeled as such and not represented as fact.
 
+Existing capabilities are cited evidence: each carries a source path and an
+exact quotation, and is verified against the captured snapshot the same way.
+Gaps are inferences relative to the stated goals, not repository facts.
+
 The report includes the feature request, project identity, the snapshot
 SHA-256 (`source_sha`) computed over the deterministically ordered inspected
 file paths and contents, model identifier, prompt-version identifier, and
@@ -106,9 +110,13 @@ Every generated report includes these headings:
 
 - `# Feature assessment: ...`
 - `## Request`
+- `## Problem statement`
+- `## Goals`
 - `## Summary`
 - `## Repository context and feature fit`
 - `## Implementation impact`
+- `## Existing capabilities`
+- `## Gaps`
 - `## Cited evidence`
 - `## Inferences`
 - `## Unsupported claims`
@@ -137,6 +145,10 @@ entries, the report explicitly says `None reported.`
 - Reference checkout contents are unchanged after a successful assessment.
 - Reports are written outside all configured repository paths.
 - Automated tests make no provider/network requests.
+- Two projects configured in one TOML file can each be assessed without code
+  changes.
+- The report includes problem statement, goals, existing capabilities, and
+  gaps sections.
 
 ## Non-goals
 

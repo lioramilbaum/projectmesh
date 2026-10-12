@@ -15,6 +15,8 @@ _RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        "problem_statement": {"type": "string"},
+        "goals": {"type": "array", "items": {"type": "string"}},
         "cited_evidence": {
             "type": "array",
             "items": {
@@ -40,17 +42,36 @@ _RESPONSE_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "existing_capabilities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "source_path": {"type": "string"},
+                    "quote": {"type": "string"},
+                    "capability": {"type": "string"},
+                },
+                "required": ["claim", "source_path", "quote", "capability"],
+                "additionalProperties": False,
+            },
+        },
         "unsupported_claims": {"type": "array", "items": {"type": "string"}},
         "risks": {"type": "array", "items": {"type": "string"}},
         "open_questions": {"type": "array", "items": {"type": "string"}},
+        "gaps": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
         "summary",
+        "problem_statement",
+        "goals",
         "cited_evidence",
+        "existing_capabilities",
         "inferences",
         "unsupported_claims",
         "risks",
         "open_questions",
+        "gaps",
     ],
     "additionalProperties": False,
 }
