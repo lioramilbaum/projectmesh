@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 from projectmesh.cli import main
@@ -120,3 +122,53 @@ def test_cli_unknown_project_is_a_clear_error(tmp_path: Path, capsys) -> None:
     assert exit_code == 2
     assert "Unknown project 'missing'" in captured.err
     assert captured.out == ""
+
+
+def test_cli_end_to_end_with_claude_cli_provider(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    project = _make_project(tmp_path)
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        f"""
+[provider]
+type = "claude-cli"
+model = "sonnet"
+
+[projects.fixture]
+name = "Fixture"
+path = "{project.as_posix()}"
+
+[assessment]
+output_dir = "{(tmp_path / 'reports').as_posix()}"
+""",
+        encoding="utf-8",
+    )
+    stub = StubProvider()
+
+    def fake_run(argv, **kwargs):
+        system_prompt = argv[argv.index("--system-prompt") + 1]
+        structured = json.loads(stub.complete(system_prompt, kwargs["input"]))
+        stdout = json.dumps({"is_error": False, "structured_output": structured})
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr("projectmesh.provider.subprocess.run", fake_run)
+
+    exit_code = main(
+        [
+            "assess",
+            "--config",
+            str(config_path),
+            "--project",
+            "fixture",
+            "--feature-request",
+            "Add search",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    report = Path(captured.out.strip()).read_text(encoding="utf-8")
+    assert "claude-cli (local Claude Code session)" in report
+    assert "The system lacks X" in report

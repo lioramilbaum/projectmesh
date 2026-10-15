@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import tempfile
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from projectmesh.models import ProviderConfig
+from projectmesh.models import PROVIDER_CLAUDE_CLI, ProviderConfig
 
 
 _RESPONSE_SCHEMA = {
@@ -79,6 +81,14 @@ _RESPONSE_SCHEMA = {
 
 class ProviderError(RuntimeError):
     """Raised when the configured model provider cannot complete a request."""
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:200]
+    return "no error output"
 
 
 def _is_schema_format_incompatibility(error: HTTPError) -> bool:
@@ -180,6 +190,80 @@ class OpenAICompatibleProvider:
         return content
 
 
+class ClaudeCLIProvider:
+    """Runs completions through the local, logged-in Claude Code CLI."""
+
+    def __init__(self, config: ProviderConfig) -> None:
+        self.config = config
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        argv = [
+            "claude", "-p",
+            "--model", self.config.model,
+            "--system-prompt", system_prompt,
+            "--output-format", "json",
+            "--json-schema", json.dumps(_RESPONSE_SCHEMA),
+            "--tools", "",
+            "--strict-mcp-config",
+            "--no-session-persistence",
+        ]
+        with tempfile.TemporaryDirectory() as workdir:
+            try:
+                result = subprocess.run(
+                    argv,
+                    input=user_prompt,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.config.timeout_seconds,
+                    cwd=workdir,
+                    check=False,
+                )
+            except FileNotFoundError:
+                raise ProviderError(
+                    "Claude CLI executable 'claude' was not found on PATH."
+                ) from None
+            except OSError:
+                raise ProviderError("Could not start the Claude CLI.") from None
+            except subprocess.TimeoutExpired:
+                raise ProviderError(
+                    f"Claude CLI did not finish within {self.config.timeout_seconds} seconds."
+                ) from None
+
+        rc = result.returncode
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+
+        try:
+            envelope = json.loads(stdout)
+            if not isinstance(envelope, dict):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            if rc != 0:
+                raise ProviderError(
+                    f"Claude CLI exited with status {rc}: {_first_line(stderr)}"
+                ) from None
+            raise ProviderError("Claude CLI returned an invalid JSON response.") from None
+
+        if envelope.get("is_error") or rc != 0:
+            msg = envelope.get("result", "")
+            detail = str(msg)[:200] if msg else f"exit status {rc}"
+            raise ProviderError(f"Claude CLI reported an error: {detail}")
+
+        structured = envelope.get("structured_output")
+        if isinstance(structured, dict):
+            return json.dumps(structured)
+
+        text = envelope.get("result", "")
+        if isinstance(text, str) and text.strip():
+            return text
+
+        raise ProviderError("Claude CLI returned an empty completion.")
+
+
 def create_provider(config: ProviderConfig) -> CompletionProvider:
     """Construct the configured provider implementation."""
+    if config.type == PROVIDER_CLAUDE_CLI:
+        return ClaudeCLIProvider(config)
     return OpenAICompatibleProvider(config)

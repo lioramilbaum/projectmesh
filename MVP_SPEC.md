@@ -62,8 +62,19 @@ path = "../service"
 output_dir = "../assessments"
 ```
 
-`provider.endpoint`, `provider.model`, and `provider.api_key_env` are
-required. `timeout_seconds` defaults to 60. At least one project is
+`provider.type` defaults to `"openai-compatible"`. For that type,
+`provider.endpoint` and `provider.api_key_env` are required. For
+`"claude-cli"`, both must be omitted and the local `claude` binary is used:
+
+```toml
+[provider]
+type            = "claude-cli"
+model           = "sonnet"
+timeout_seconds = 300
+```
+
+`provider.model` is required for both types. `timeout_seconds` defaults to 60
+(300 for `claude-cli`). At least one project is
 required; each project has a nonempty `name` and a valid local `path`.
 `assessment.output_dir` is optional and defaults to `assessments` beside the
 config file. Unknown or malformed values produce actionable configuration

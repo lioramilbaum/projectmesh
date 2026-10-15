@@ -14,3 +14,9 @@ path = "../example-library"
 
 [assessment]
 output_dir = "../projectmesh-assessments"
+
+# Alternative: use a local Claude Code subscription (no API key needed)
+# [provider]
+# type            = "claude-cli"
+# model           = "sonnet"
+# timeout_seconds = 300

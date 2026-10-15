@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 PROMPT_VERSION = "projectmesh-assessment-v2"
+PROVIDER_OPENAI_COMPATIBLE = "openai-compatible"
+PROVIDER_CLAUDE_CLI = "claude-cli"
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,7 @@ class ProviderConfig:
     model: str
     api_key_env: str
     timeout_seconds: int = 60
+    type: str = "openai-compatible"
 
 
 @dataclass(frozen=True)

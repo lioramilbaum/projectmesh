@@ -7,7 +7,7 @@ fit, followed by likely implementation impact.
 
 The inspected repository is read-only: projectmesh does not clone, fetch,
 modify, or create files in it. Reports are written separately. The first
-provider is an OpenAI-compatible chat-completions HTTP endpoint; endpoint and
+provider is an OpenAI-compatible chat-completions HTTP endpoint or a Claude Code subscription; endpoint and
 model are configurable, and the API key is read from an environment variable.
 Repository text is sent to that configured endpoint when an assessment runs.
 Tests use an in-process stub provider and do not make network calls.
@@ -56,6 +56,25 @@ Set the configured environment variable without putting its value in TOML:
 ```sh
 export OPENAI_API_KEY="..."
 ```
+
+### Using a Claude Code subscription
+
+Set `type = "claude-cli"` in `[provider]` to use the local `claude` binary
+instead of an HTTP endpoint. No API key environment variable is needed.
+
+```toml
+[provider]
+type            = "claude-cli"
+model           = "sonnet"
+timeout_seconds = 300
+```
+
+Requirements:
+
+- `claude` must be on PATH and logged in (`claude --version` should work)
+- Repository text is sent to Anthropic through your local Claude Code session
+- The CLI runs with tools and MCP disabled from a temporary directory
+- Raise `timeout_seconds` if assessments time out on large repositories
 
 Run an assessment:
 

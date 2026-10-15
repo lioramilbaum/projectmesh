@@ -5,6 +5,7 @@ from __future__ import annotations
 from projectmesh.code_analysis import analyze_code
 from projectmesh.models import (
     PROMPT_VERSION,
+    PROVIDER_OPENAI_COMPATIBLE,
     Assessment,
     ProjectConfig,
     ProviderConfig,
@@ -40,7 +41,11 @@ def create_assessment(
         analyses=results,
         model=provider_config.model,
         prompt_version=PROMPT_VERSION,
-        provider_endpoint=provider_config.endpoint,
+        provider_endpoint=(
+            provider_config.endpoint
+            if provider_config.type == PROVIDER_OPENAI_COMPATIBLE
+            else "claude-cli (local Claude Code session)"
+        ),
         source_sha=snapshot.source_sha,
         source_paths=tuple(source_file.path for source_file in snapshot.files),
         skipped_paths=snapshot.skipped_paths,
