@@ -5,13 +5,15 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
+from test_github import _graphql_response, _stub_github
 
-from projectmesh.cli import _report_filename, _write_report
-from projectmesh.cli import run_assessment
+from projectmesh.cli import _report_filename, _write_report, run_assessment
 from projectmesh.config import load_config
-from projectmesh.models import PROMPT_VERSION, ProviderConfig
+from projectmesh.github import GitHubError
+from projectmesh.models import PROMPT_VERSION
 from projectmesh.provider import CompletionProvider, ProviderError
 
 
@@ -116,6 +118,44 @@ class StubProvider(CompletionProvider):
         return json.dumps(result)
 
 
+class GitHubStubProvider(StubProvider):
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        if "GitHub activity for acme/widgets" not in user_prompt:
+            return super().complete(system_prompt, user_prompt)
+        self.prompts.append((system_prompt, user_prompt))
+        result = {
+            "summary": "Login problems are tracked in GitHub issues.",
+            "problem_statement": "Users cannot log in.",
+            "goals": ["Restore login"],
+            "cited_evidence": [
+                {
+                    "claim": "Issue 12 reports that users cannot log in.",
+                    "source_path": "https://github.com/acme/widgets/issues/12",
+                    "quote": "Users can't log in.",
+                },
+                {
+                    "claim": "Issue 999 confirms the export is required.",
+                    "source_path": "https://github.com/acme/widgets/issues/999",
+                    "quote": "Export is required.",
+                },
+            ],
+            "existing_capabilities": [
+                {
+                    "claim": "Pull request 45 fixes issue 12.",
+                    "source_path": "https://github.com/acme/widgets/pull/45",
+                    "quote": "Fixes #12.",
+                    "capability": "Repository context and feature fit",
+                }
+            ],
+            "inferences": [],
+            "unsupported_claims": [],
+            "risks": [],
+            "open_questions": [],
+            "gaps": [],
+        }
+        return json.dumps(result)
+
+
 class SecretEchoProvider(StubProvider):
     def __init__(self, secret: str) -> None:
         super().__init__()
@@ -160,8 +200,11 @@ def _valid_completion(summary: str) -> str:
     )
 
 
-def _config_file(tmp_path: Path, project: Path) -> Path:
+def _config_file(
+    tmp_path: Path, project: Path, github_repo: str | None = None
+) -> Path:
     config_path = tmp_path / "projects.toml"
+    github_line = f'github_repo = "{github_repo}"\n' if github_repo else ""
     config_path.write_text(
         f"""
 [provider]
@@ -172,7 +215,7 @@ api_key_env = "TEST_API_KEY"
 [projects.fixture]
 name = "Fixture"
 path = "{project.as_posix()}"
-
+{github_line}
 [assessment]
 output_dir = "{(tmp_path / 'reports').as_posix()}"
 """,
@@ -528,3 +571,90 @@ def test_report_write_rejects_symlink_created_during_staging(
 
     assert (project / "README.md").read_bytes() == original_readme
     assert report_path.is_symlink()
+
+
+def test_github_evidence_is_cited_with_item_url(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "test-tok")
+    _stub_github(monkeypatch, _graphql_response())
+    project = _make_project(tmp_path)
+    original = _tree_bytes(project)
+    config = load_config(_config_file(tmp_path, project, github_repo="acme/widgets"))
+    provider = GitHubStubProvider()
+
+    report_path = run_assessment(
+        config=config,
+        project_key="fixture",
+        feature_request="Export archived records",
+        output_dir=config.output_dir,
+        provider_factory=lambda _: provider,
+    )
+
+    report = report_path.read_text(encoding="utf-8")
+    issue_url = "https://github.com/acme/widgets/issues/12"
+    pr_url = "https://github.com/acme/widgets/pull/45"
+    discussion_url = "https://github.com/acme/widgets/discussions/3"
+    assert f"Source: `{issue_url}`" in _section(report, "Cited evidence")
+    assert pr_url in _section(report, "Existing capabilities")
+    assert "/issues/999" not in _section(report, "Cited evidence")
+    assert "/issues/999" in _section(report, "Unsupported claims")
+    traceability = _section(report, "Traceability")
+    for url in (issue_url, pr_url, discussion_url):
+        assert url in traceability
+    assert "GitHub evidence SHA-256" in traceability
+    assert "GitHub repository: `acme/widgets`" in _section(report, "Metadata")
+    assert f"- Prompt version: `{PROMPT_VERSION}+github-v1`" in report
+    assert "GitHub activity" not in provider.prompts[1][1]
+    for system_prompt, user_prompt in provider.prompts:
+        assert "test-tok" not in system_prompt + user_prompt
+    assert "test-tok" not in report
+    assert _tree_bytes(project) == original
+
+
+def test_without_github_repo_makes_no_github_calls(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    _stub_github(monkeypatch, AssertionError("GitHub must not be contacted"))
+    project = _make_project(tmp_path)
+    config = load_config(_config_file(tmp_path, project))
+    provider = StubProvider()
+
+    report_path = run_assessment(
+        config=config,
+        project_key="fixture",
+        feature_request="Export archived records",
+        output_dir=config.output_dir,
+        provider_factory=lambda _: provider,
+    )
+
+    report = report_path.read_text(encoding="utf-8")
+    assert all("GitHub activity" not in user for _, user in provider.prompts)
+    assert not any("GitHub" in line for line in report.splitlines())
+    assert f"- Prompt version: `{PROMPT_VERSION}`" in report
+
+
+def test_github_failure_aborts_before_provider_and_writes_no_report(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "test-tok")
+    _stub_github(
+        monkeypatch,
+        HTTPError("https://api.github.com/graphql", 404, "Not Found", {}, None),
+    )
+    project = _make_project(tmp_path)
+    config = load_config(_config_file(tmp_path, project, github_repo="acme/widgets"))
+    provider = StubProvider()
+
+    with pytest.raises(GitHubError):
+        run_assessment(
+            config=config,
+            project_key="fixture",
+            feature_request="Export archived records",
+            output_dir=config.output_dir,
+            provider_factory=lambda _: provider,
+        )
+
+    assert provider.prompts == []
+    assert not config.output_dir.exists()

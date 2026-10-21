@@ -4,9 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from projectmesh.cli import main
-from projectmesh.provider import CompletionProvider
 from test_assessment import StubProvider, _config_file, _make_project
+
+from projectmesh.cli import main
 
 
 def test_cli_end_to_end_with_injected_stub(tmp_path: Path, capsys) -> None:
@@ -172,3 +172,31 @@ output_dir = "{(tmp_path / 'reports').as_posix()}"
     report = Path(captured.out.strip()).read_text(encoding="utf-8")
     assert "claude-cli (local Claude Code session)" in report
     assert "The system lacks X" in report
+
+
+def test_cli_github_error_is_clear_nonzero(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    project = _make_project(tmp_path)
+    config_path = _config_file(tmp_path, project, github_repo="acme/widgets")
+
+    exit_code = main(
+        [
+            "assess",
+            "--config",
+            str(config_path),
+            "--project",
+            "fixture",
+            "--feature-request",
+            "Export archived records",
+            "--output-dir",
+            str(tmp_path / "cli-reports"),
+        ],
+        provider_factory=lambda _: StubProvider(),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "GITHUB_TOKEN" in captured.err
+    assert captured.out == ""

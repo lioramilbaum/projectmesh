@@ -7,7 +7,8 @@ CLI -> TOML config -> read-only repository snapshot
                               |
                     deterministic orchestrator
                      /                    \
-        repository-context analysis   implementation-impact analysis
+GitHub reader ->  repository-context   implementation-impact analysis
+(optional)            analysis                      |
                      \                    /
                        provider interface
                               |
@@ -19,6 +20,11 @@ CLI -> TOML config -> read-only repository snapshot
   directory, skips generated/VCS directories, symlinks, binary files, and
   oversized files, then freezes those inputs in a snapshot with a stable
   SHA-256. It never writes or executes repository files.
+- **GitHub reader** (optional, when `github_repo` is set) fetches issues,
+  pull requests, and discussions through one read-only GraphQL query, renders
+  each item to deterministic text keyed by its URL, and freezes them in a
+  GitHub snapshot with a stable SHA-256. Only the repository-context analysis
+  receives this snapshot; the implementation-impact analysis does not.
 - **Orchestrator** runs the two analysis capabilities sequentially against
   the same snapshot and selected provider. Sequencing and report structure
   are deterministic; model prose itself is not.
@@ -54,10 +60,14 @@ output directory is resolved and checked against every project root before
 writing. Tests compare fixture repository contents before and after
 assessment.
 
-Provider calls are the only network-capable operation. The configured
-endpoint receives the prompt and inspected text when an assessment runs.
+Provider calls are the only network-capable operation, apart from one
+read-only GitHub GraphQL query per assessment when `github_repo` is set. The
+configured endpoint receives the prompt and inspected text, including fetched
+GitHub text, when an assessment runs.
 The claude-cli provider runs the local `claude` binary with tools and MCP
 disabled from a temporary working directory.
 Credentials are read from the environment and are never written to reports
-or logged. Tests replace this boundary with a stub and do not make network
-calls.
+or logged. `GITHUB_TOKEN` is read from the environment only for the GitHub
+query, and GitHub error messages never include the token or response bodies.
+Tests replace this boundary with a stub and do not make network calls; GitHub
+tests stub `projectmesh.github.urlopen`.

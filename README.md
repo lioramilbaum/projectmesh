@@ -76,6 +76,37 @@ Requirements:
 - The CLI runs with tools and MCP disabled from a temporary directory
 - Raise `timeout_seconds` if assessments time out on large repositories
 
+### GitHub activity as evidence
+
+Set `github_repo = "owner/repo"` in a `[projects.<key>]` entry to also assess
+that repository's issues, pull requests, and discussions. Each item is cited
+by its GitHub URL, and the report records the GitHub repository and an
+evidence SHA-256 in its traceability and metadata sections.
+
+```toml
+[projects.my-service]
+name = "My service"
+path = "../my-service"
+github_repo = "my-org/my-service"
+```
+
+Provide a token through the environment, never in TOML:
+
+```sh
+export GITHUB_TOKEN="..."
+```
+
+- The token needs read access to issues, pull requests, and discussions in
+  that repository.
+- projectmesh fetches up to 50 most recently updated items per kind and up to
+  20 comments per item. Items and text beyond fixed size limits are truncated
+  or skipped and listed in the report.
+- Fetched GitHub text is sent to the configured provider along with repository
+  text when an assessment runs.
+- projectmesh only reads from GitHub with one GraphQL query per assessment. It
+  never writes to GitHub.
+- Projects without `github_repo` make no GitHub requests.
+
 Run an assessment:
 
 ```sh

@@ -19,6 +19,11 @@ hosted locally or remotely. For a remote endpoint, inspected repository text
 is sent to that provider. Tests must inject a stub provider and must not make
 network calls.
 
+When a project sets `github_repo`, one read-only GitHub GraphQL query per
+assessment fetches issues, pull requests, and discussions for that repository
+(see [GitHub evidence](#github-evidence)). Its text is also sent to the
+provider. No other GitHub access occurs.
+
 ## CLI contract
 
 Entry point: `projectmesh`.
@@ -36,7 +41,9 @@ projectmesh assess --config PATH --project KEY --feature-request TEXT
   config file's directory. A CLI output override is relative to the current
   working directory. `~` is expanded.
 - The configured project path must be an existing local directory. No
-  network fetch or clone is performed.
+  repository clone or fetch is performed. The only network access besides the
+  provider is the optional read-only GitHub GraphQL query described under
+  GitHub evidence, which runs only when `github_repo` is set.
 - On success, create the output directory if needed, write a Markdown report,
   print its path, and return exit status 0. On invalid config, unknown
   project, provider failure, or filesystem error, print a concise error to
@@ -57,10 +64,15 @@ timeout_seconds = 60
 [projects.service]
 name = "Service"
 path = "../service"
+github_repo = "owner/service"   # optional
 
 [assessment]
 output_dir = "../assessments"
 ```
+
+`github_repo` is optional and must be an `owner/repo` string. When set, the
+`GITHUB_TOKEN` environment variable must also be set; the token is never
+written to TOML, reports, or logs.
 
 `provider.type` defaults to `"openai-compatible"`. For that type,
 `provider.endpoint` and `provider.api_key_env` are required. For
@@ -107,6 +119,28 @@ not instructions.
 Existing capabilities are cited evidence: each carries a source path and an
 exact quotation, and is verified against the captured snapshot the same way.
 Gaps are inferences relative to the stated goals, not repository facts.
+
+## GitHub evidence
+
+When `github_repo` is configured, the GitHub reader fetches up to 50 most
+recently updated issues, pull requests, and discussions, with up to 20
+comments each, through a single read-only GraphQL query. Each item is rendered
+as deterministic plain text with its type, number, title, state, labels, URL,
+body, and comments. Items are ordered by kind (issues, pull requests,
+discussions), then by number. Text is capped per item and per assessment;
+items that exceed the total budget are skipped and recorded.
+
+GitHub items are evidence for the repository-context capability only. Their
+`source_path` is the item URL, and each quote is verified against the rendered
+item text exactly like file citations. The implementation-impact capability
+receives no GitHub text.
+
+When `github_repo` is configured, the traceability section also lists the
+GitHub repository, the GitHub evidence SHA-256 (computed over each inspected
+item's URL and rendered text in order), the inspected item URLs, and any item
+URLs skipped by size limits. The metadata section lists the GitHub repository,
+and the prompt version carries the `+github-v1` suffix. Without `github_repo`,
+none of these fields appear and the prompt version is unchanged.
 
 The report includes the feature request, project identity, the snapshot
 SHA-256 (`source_sha`) computed over the deterministically ordered inspected
@@ -160,10 +194,24 @@ entries, the report explicitly says `None reported.`
   changes.
 - The report includes problem statement, goals, existing capabilities, and
   gaps sections.
+- Issue #10 (GitHub evidence): with `github_repo` and `GITHUB_TOKEN` set, the
+  repository-context analysis cites issue, pull request, and discussion URLs
+  that verify against the rendered item text; fabricated GitHub URLs are
+  demoted to unsupported claims.
+- Issue #10: the GitHub SHA, inspected item URLs, and repository appear in
+  the traceability and metadata sections; the prompt version gains
+  `+github-v1`.
+- Issue #10: without `github_repo`, no GitHub request is made and the report
+  is unchanged from the non-GitHub format.
+- Issue #10: a missing token, rejected request, unreachable GitHub, or unknown
+  repository fails before any provider call, writes no report, and produces a
+  nonzero exit without printing the token.
 
 ## Non-goals
 
 - Cloning, fetching, or otherwise acquiring repositories.
+- Writing to GitHub (comments, labels, issues, or any mutation), webhooks, or
+  sources other than the local checkout and the GitHub items described above.
 - Writing to, patching, or executing code from a reference repository.
 - Autonomous implementation, planning-agent workflows, or code changes.
 - A web interface, database, background jobs, or parallel agent orchestration.

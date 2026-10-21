@@ -73,40 +73,128 @@ output_dir = "reports"
     assert config.provider.model == "sonnet"
 
 
+def test_loads_optional_github_repo(tmp_path: Path) -> None:
+    (tmp_path / "service").mkdir()
+    (tmp_path / "library").mkdir()
+    config_file = _write_config(
+        tmp_path / "projects.toml",
+        """
+[provider]
+endpoint = "https://example.test/v1/chat/completions"
+model = "test-model"
+api_key_env = "TEST_API_KEY"
+
+[projects.service]
+name = "Service"
+path = "service"
+github_repo = "acme/widgets"
+
+[projects.library]
+name = "Library"
+path = "library"
+""",
+    )
+
+    config = load_config(config_file)
+
+    assert config.projects["service"].github_repo == "acme/widgets"
+    assert config.projects["library"].github_repo is None
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [
         ("[provider\n", "Invalid TOML"),
         (
-            '[provider]\ntype = "bogus"\nmodel = "m"\n'
-            '[projects.p]\nname = "P"\npath = "."\n',
+            (
+                '[provider]\ntype = "bogus"\nmodel = "m"\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
             "provider.type",
         ),
         (
-            '[provider]\ntype = "claude-cli"\nmodel = "sonnet"\n'
-            'endpoint = "https://x.test"\n[projects.p]\nname = "P"\npath = "."\n',
+            (
+                '[provider]\ntype = "claude-cli"\nmodel = "sonnet"\n'
+                'endpoint = "https://x.test"\n[projects.p]\nname = "P"\npath = "."\n'
+            ),
             "Unknown setting",
         ),
         (
-            '[provider]\ntype = "claude-cli"\n'
-            '[projects.p]\nname = "P"\npath = "."\n',
+            (
+                '[provider]\ntype = "claude-cli"\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
             "provider.model",
         ),
         (
-            '[provider]\nmodel = "m"\napi_key_env = "KEY"\n'
-            '[projects.p]\nname = "P"\npath = "."\n',
+            (
+                '[provider]\nmodel = "m"\napi_key_env = "KEY"\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
             "provider.endpoint",
         ),
         (
-            '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
-            'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "missing"\n',
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "missing"\n'
+            ),
             "path does not exist",
         ),
         (
-            '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
-            'api_key_env = "KEY"\nextra = true\n'
-            '[projects.p]\nname = "P"\npath = "."\n',
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\nextra = true\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
             "Unknown setting",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "."\n'
+                'github_repo = "acme"\n'
+            ),
+            "github_repo",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "."\n'
+                'github_repo = "acme-/repo"\n'
+            ),
+            "github_repo",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "."\n'
+                'github_repo = "ac--me/repo"\n'
+            ),
+            "github_repo",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "."\n'
+                'github_repo = "a/b/c"\n'
+            ),
+            "github_repo",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "."\n'
+                'github_repo = "acme/.."\n'
+            ),
+            "github_repo",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[projects.p]\nname = "P"\npath = "."\n'
+                'github_repo = 5\n'
+            ),
+            "github_repo",
         ),
     ],
 )
