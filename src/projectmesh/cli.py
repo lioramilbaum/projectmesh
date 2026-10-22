@@ -9,17 +9,14 @@ import re
 import stat
 import sys
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence
 
 from projectmesh.config import ConfigError, load_config
-from projectmesh.github import GitHubError, fetch_github_snapshot
+from projectmesh.github import GitHubError
 from projectmesh.models import AppConfig, ProviderConfig
-from projectmesh.orchestrator import create_assessment
+from projectmesh.orchestrator import run_assessment_workflow
 from projectmesh.provider import CompletionProvider, ProviderError, create_provider
-from projectmesh.render import render_markdown
-from projectmesh.repository import capture_repository
-
 
 ProviderFactory = Callable[[ProviderConfig], CompletionProvider]
 
@@ -130,20 +127,15 @@ def run_assessment(
     _validate_output_dir(output_dir, config)
     report_path = output_dir / _report_filename(project_key, feature_request.strip())
     _validate_report_path(report_path, config)
-    project = config.projects[project_key]
-    snapshot = capture_repository(project.path)
-    github = fetch_github_snapshot(project.github_repo) if project.github_repo else None
     provider = provider_factory(config.provider)
-    assessment = create_assessment(
-        project=project,
+    final_state = run_assessment_workflow(
+        project=config.projects[project_key],
         feature_request=feature_request.strip(),
-        snapshot=snapshot,
         provider_config=config.provider,
         provider=provider,
-        github=github,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    _write_report(report_path, render_markdown(assessment), config)
+    _write_report(report_path, final_state["report_markdown"], config)
     return report_path
 
 
