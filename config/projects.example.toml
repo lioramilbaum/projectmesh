@@ -7,6 +7,9 @@ timeout_seconds = 60
 [projects.example-service]
 name = "Example service"
 path = "../example-service"
+# Optional: also assess GitHub issues, pull requests, and discussions.
+# Requires GITHUB_TOKEN to be set in the environment (read access only).
+# github_repo = "owner/example-service"
 
 [projects.example-library]
 name = "Example library"

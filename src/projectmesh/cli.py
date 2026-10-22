@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from projectmesh.config import ConfigError, load_config
+from projectmesh.github import GitHubError, fetch_github_snapshot
 from projectmesh.models import AppConfig, ProviderConfig
 from projectmesh.orchestrator import create_assessment
 from projectmesh.provider import CompletionProvider, ProviderError, create_provider
@@ -131,6 +132,7 @@ def run_assessment(
     _validate_report_path(report_path, config)
     project = config.projects[project_key]
     snapshot = capture_repository(project.path)
+    github = fetch_github_snapshot(project.github_repo) if project.github_repo else None
     provider = provider_factory(config.provider)
     assessment = create_assessment(
         project=project,
@@ -138,6 +140,7 @@ def run_assessment(
         snapshot=snapshot,
         provider_config=config.provider,
         provider=provider,
+        github=github,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_report(report_path, render_markdown(assessment), config)
@@ -169,7 +172,7 @@ def main(
             )
             print(report_path)
             return 0
-    except (ConfigError, ProviderError, OSError, ValueError) as exc:
+    except (ConfigError, GitHubError, ProviderError, OSError, ValueError) as exc:
         print(f"projectmesh: error: {exc}", file=sys.stderr)
         return 2
     return 0

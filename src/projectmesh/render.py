@@ -67,6 +67,28 @@ def _has_sensitive_query_name(name: str) -> bool:
     return bool(_SENSITIVE_QUERY_PARTS.intersection(parts.split()))
 
 
+def _github_traceability(assessment: Assessment) -> str:
+    github = assessment.github
+    if github is None:
+        return ""
+    lines = [
+        f"- GitHub repository: `{github.repo}`",
+        f"- GitHub evidence SHA-256: `{github.source_sha}`",
+        "- Inspected GitHub items:",
+    ]
+    lines += [f"  - `{item.path}`" for item in github.items] or ["  - None reported."]
+    if github.skipped_urls:
+        lines.append("- GitHub items skipped by size limits:")
+        lines += [f"  - `{url}`" for url in github.skipped_urls]
+    return "\n".join(lines) + "\n"
+
+
+def _github_metadata(assessment: Assessment) -> str:
+    if assessment.github is None:
+        return ""
+    return f"- GitHub repository: `{assessment.github.repo}`\n"
+
+
 def render_markdown(
     assessment: Assessment, generated_at: datetime | None = None
 ) -> str:
@@ -176,7 +198,7 @@ def render_markdown(
 - Source SHA-256: `{assessment.source_sha}`
 - Inspected source files:
 {_bullets([f"`{path}`" for path in assessment.source_paths])}
-{skipped}
+{_github_traceability(assessment)}{skipped}
 
 ## Metadata
 
@@ -186,5 +208,5 @@ def render_markdown(
 - Prompt version: `{assessment.prompt_version}`
 - Source SHA-256: `{assessment.source_sha}`
 - Provider endpoint: `{_sanitize_endpoint(assessment.provider_endpoint)}`
-- Generated at: `{generated_at.astimezone(timezone.utc).isoformat()}`
+{_github_metadata(assessment)}- Generated at: `{generated_at.astimezone(timezone.utc).isoformat()}`
 """

@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 PROMPT_VERSION = "projectmesh-assessment-v2"
+GITHUB_PROMPT_SUFFIX = "+github-v1"
 PROVIDER_OPENAI_COMPATIBLE = "openai-compatible"
 PROVIDER_CLAUDE_CLI = "claude-cli"
 
@@ -16,6 +17,7 @@ class ProjectConfig:
     key: str
     name: str
     path: Path
+    github_repo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,18 @@ class RepositorySnapshot:
     def file_map(self) -> dict[str, str]:
         """Return the captured source text keyed by normalized repository path."""
         return {source_file.path: source_file.text for source_file in self.files}
+
+
+@dataclass(frozen=True)
+class GitHubSnapshot:
+    repo: str
+    items: tuple[SourceFile, ...]
+    source_sha: str
+    skipped_urls: tuple[str, ...] = ()
+
+    def file_map(self) -> dict[str, str]:
+        """Return the rendered item text keyed by its GitHub URL."""
+        return {item.path: item.text for item in self.items}
 
 
 @dataclass(frozen=True)
@@ -94,3 +108,4 @@ class Assessment:
     source_sha: str
     source_paths: tuple[str, ...]
     skipped_paths: tuple[str, ...]
+    github: GitHubSnapshot | None = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
@@ -17,6 +18,11 @@ from projectmesh.models import (
 
 class ConfigError(ValueError):
     """Raised when configuration is invalid or incomplete."""
+
+
+_GITHUB_REPO = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}/[A-Za-z0-9._-]{1,100}"
+)
 
 
 def _table(value: object, name: str) -> dict[str, object]:
@@ -39,6 +45,21 @@ def _required_string(table: dict[str, object], key: str, location: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"'{location}.{key}' must be a non-empty string.")
     return value.strip()
+
+
+def _github_repo(table: dict[str, object], key: str) -> str | None:
+    value = table.get("github_repo")
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or _GITHUB_REPO.fullmatch(value) is None
+        or value.split("/", 1)[1] in {".", ".."}
+    ):
+        raise ConfigError(
+            f"'projects.{key}.github_repo' must be a string in 'owner/repo' form."
+        )
+    return value
 
 
 def _resolve_path(value: str, base: Path) -> Path:
@@ -117,9 +138,12 @@ def load_config(path: str | Path) -> AppConfig:
         if not isinstance(key, str) or not key.strip():
             raise ConfigError("Project keys under 'projects' must be non-empty strings.")
         project_table = _table(raw_project, f"projects.{key}")
-        _reject_unknown_keys(project_table, {"name", "path"}, f"projects.{key}")
+        _reject_unknown_keys(
+            project_table, {"name", "path", "github_repo"}, f"projects.{key}"
+        )
         name = _required_string(project_table, "name", f"projects.{key}")
         configured_path = _required_string(project_table, "path", f"projects.{key}")
+        github_repo = _github_repo(project_table, key)
         project_path = _resolve_path(configured_path, config_path.parent)
         if not project_path.exists():
             raise ConfigError(
@@ -127,7 +151,9 @@ def load_config(path: str | Path) -> AppConfig:
             )
         if not project_path.is_dir():
             raise ConfigError(f"Project '{key}' path is not a directory: {project_path}")
-        projects[key] = ProjectConfig(key=key, name=name, path=project_path)
+        projects[key] = ProjectConfig(
+            key=key, name=name, path=project_path, github_repo=github_repo
+        )
 
     assessment_table = raw.get("assessment", {})
     assessment = _table(assessment_table, "assessment")
