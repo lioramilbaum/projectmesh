@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -10,6 +10,9 @@ PROMPT_VERSION = "projectmesh-assessment-v2"
 GITHUB_PROMPT_SUFFIX = "+github-v1"
 PROVIDER_OPENAI_COMPATIBLE = "openai-compatible"
 PROVIDER_CLAUDE_CLI = "claude-cli"
+SPEC_ANALYSIS = "spec_analysis"
+CODE_ANALYSIS = "code_analysis"
+ANALYSIS_CAPABILITIES = (SPEC_ANALYSIS, CODE_ANALYSIS)
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,11 @@ class AppConfig:
     projects: dict[str, ProjectConfig]
     provider: ProviderConfig
     output_dir: Path
+    analysis_providers: dict[str, ProviderConfig] = field(default_factory=dict)
+
+    def provider_for(self, capability: str) -> ProviderConfig:
+        """Return the provider configured for one analysis, else the default."""
+        return self.analysis_providers.get(capability, self.provider)
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,14 @@ class AnalysisResult:
 
 
 @dataclass(frozen=True)
+class AnalysisProvenance:
+    capability: str
+    title: str
+    model: str
+    provider_endpoint: str
+
+
+@dataclass(frozen=True)
 class Assessment:
     project: ProjectConfig
     feature_request: str
@@ -109,3 +125,4 @@ class Assessment:
     source_paths: tuple[str, ...]
     skipped_paths: tuple[str, ...]
     github: GitHubSnapshot | None = None
+    analysis_providers: tuple[AnalysisProvenance, ...] = ()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError
@@ -17,6 +18,7 @@ from test_assessment import (
     _make_project,
     _section,
     _tree_bytes,
+    _valid_completion,
 )
 from test_github import _graphql_response, _stub_github
 
@@ -24,12 +26,15 @@ from projectmesh import orchestrator
 from projectmesh.code_analysis import analyze_code
 from projectmesh.config import load_config
 from projectmesh.github import GitHubError
+from projectmesh.models import CODE_ANALYSIS, SPEC_ANALYSIS, ProviderConfig
 from projectmesh.orchestrator import (
+    ANALYSIS_STAGES,
     ASSEMBLE_REPORT,
     ASSESS_IMPLEMENTATION_IMPACT,
     ASSESS_SPECIFICATION,
     PREPARE_CONTEXT,
     WORKFLOW_STAGES,
+    AnalysisProvider,
     AssessmentContext,
     assemble_assessment,
     build_assessment_graph,
@@ -68,14 +73,15 @@ def _initial_state(generated_at: datetime | None = None) -> dict:
     }
 
 
-def test_graph_declares_four_stages_in_linear_order() -> None:
+def test_graph_fans_out_analyses_and_joins_before_assembly() -> None:
     graph = build_assessment_graph().get_graph()
 
     assert set(graph.nodes) == {"__start__", *WORKFLOW_STAGES, "__end__"}
     assert {(edge.source, edge.target) for edge in graph.edges} == {
         ("__start__", PREPARE_CONTEXT),
         (PREPARE_CONTEXT, ASSESS_SPECIFICATION),
-        (ASSESS_SPECIFICATION, ASSESS_IMPLEMENTATION_IMPACT),
+        (PREPARE_CONTEXT, ASSESS_IMPLEMENTATION_IMPACT),
+        (ASSESS_SPECIFICATION, ASSEMBLE_REPORT),
         (ASSESS_IMPLEMENTATION_IMPACT, ASSEMBLE_REPORT),
         (ASSEMBLE_REPORT, "__end__"),
     }
@@ -94,7 +100,11 @@ def test_stream_transitions_follow_established_order(tmp_path: Path) -> None:
         )
     )
 
-    assert [name for update in updates for name in update] == list(WORKFLOW_STAGES)
+    names = [name for update in updates for name in update]
+    assert names[0] == PREPARE_CONTEXT
+    assert set(names[1:3]) == set(ANALYSIS_STAGES)
+    assert names[-1] == ASSEMBLE_REPORT
+    assert len(names) == len(WORKFLOW_STAGES)
     keys = {name: set(update[name]) for update in updates for name in update}
     assert keys == {
         PREPARE_CONTEXT: {"snapshot", "github", "completed_stages"},
@@ -103,12 +113,130 @@ def test_stream_transitions_follow_established_order(tmp_path: Path) -> None:
         ASSEMBLE_REPORT: {"assessment", "report_markdown", "completed_stages"},
     }
     assert all("provider" not in update[name] for update in updates for name in update)
+    completed = [
+        stage
+        for update in updates
+        for name in update
+        for stage in update[name]["completed_stages"]
+    ]
+    assert completed[0] == PREPARE_CONTEXT
+    assert completed[-1] == ASSEMBLE_REPORT
+    assert set(completed[1:3]) == set(ANALYSIS_STAGES)
+    assert len(completed) == 4
 
     final_state = build_assessment_graph().invoke(
         _initial_state(FIXED_TIME),
         context=_context(config, StubProvider()),
     )
-    assert final_state["completed_stages"] == WORKFLOW_STAGES
+    final_completed = final_state["completed_stages"]
+    assert final_completed[0] == PREPARE_CONTEXT
+    assert final_completed[-1] == ASSEMBLE_REPORT
+    assert set(final_completed[1:3]) == set(ANALYSIS_STAGES)
+    assert len(final_completed) == 4
+
+
+def test_analyses_run_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _load(tmp_path)
+    barrier = threading.Barrier(2, timeout=5)
+    thread_ids: dict[str, int] = {}
+
+    def concurrent(name, real):
+        def wrapper(*args, **kwargs):
+            barrier.wait()
+            thread_ids[name] = threading.get_ident()
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(orchestrator, "analyze_spec", concurrent("spec", REAL_SPEC))
+    monkeypatch.setattr(orchestrator, "analyze_code", concurrent("code", REAL_CODE))
+
+    final_state = run_assessment_workflow(
+        project=config.projects["fixture"],
+        feature_request=REQUEST,
+        provider_config=config.provider,
+        provider=StubProvider(),
+        generated_at=FIXED_TIME,
+    )
+
+    assert thread_ids["spec"] != thread_ids["code"]
+    assert final_state["report_markdown"]
+
+
+def _agent_configs() -> tuple[ProviderConfig, ProviderConfig]:
+    spec_cfg = ProviderConfig(
+        endpoint="https://spec.test/v1/chat/completions",
+        model="spec-model",
+        api_key_env="TEST_API_KEY",
+    )
+    code_cfg = ProviderConfig(
+        endpoint="https://code.test/v1/chat/completions",
+        model="code-model",
+        api_key_env="TEST_API_KEY",
+    )
+    return spec_cfg, code_cfg
+
+
+def test_each_analysis_uses_its_configured_provider(tmp_path: Path) -> None:
+    config = _load(tmp_path)
+    spec_cfg, code_cfg = _agent_configs()
+    default_stub = StubProvider()
+    spec_stub = StubProvider()
+    code_stub = StubProvider()
+
+    final_state = run_assessment_workflow(
+        project=config.projects["fixture"],
+        feature_request=REQUEST,
+        provider_config=config.provider,
+        provider=default_stub,
+        generated_at=FIXED_TIME,
+        analysis_providers={
+            SPEC_ANALYSIS: AnalysisProvider(spec_cfg, spec_stub),
+            CODE_ANALYSIS: AnalysisProvider(code_cfg, code_stub),
+        },
+    )
+
+    assert default_stub.prompts == []
+    assert spec_stub.prompts
+    assert all(
+        "Capability: Repository context" in user for _, user in spec_stub.prompts
+    )
+    assert code_stub.prompts
+    assert all(
+        "Capability: Implementation impact" in user for _, user in code_stub.prompts
+    )
+    provenance = final_state["assessment"].analysis_providers
+    assert {prov.title: prov.model for prov in provenance} == {
+        "Repository context and feature fit": "spec-model",
+        "Implementation impact": "code-model",
+    }
+
+
+def test_partial_overrides_fall_back_to_default_provider(tmp_path: Path) -> None:
+    config = _load(tmp_path)
+    _, code_cfg = _agent_configs()
+    default_stub = StubProvider()
+    code_stub = StubProvider()
+
+    run_assessment_workflow(
+        project=config.projects["fixture"],
+        feature_request=REQUEST,
+        provider_config=config.provider,
+        provider=default_stub,
+        generated_at=FIXED_TIME,
+        analysis_providers={CODE_ANALYSIS: AnalysisProvider(code_cfg, code_stub)},
+    )
+
+    assert default_stub.prompts
+    assert all(
+        "Capability: Repository context" in user for _, user in default_stub.prompts
+    )
+    assert code_stub.prompts
+    assert all(
+        "Capability: Implementation impact" in user for _, user in code_stub.prompts
+    )
 
 
 def test_analyses_share_one_frozen_snapshot_and_github_only_reaches_spec(
@@ -215,9 +343,21 @@ def test_github_failure_stops_graph_before_analysis(
     assert provider.prompts == []
 
 
-def test_provider_error_stops_before_impact_and_assembly(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "failing_stage", [ASSESS_SPECIFICATION, ASSESS_IMPLEMENTATION_IMPACT]
+)
+def test_provider_error_in_one_analysis_stops_before_assembly(
+    tmp_path: Path, failing_stage: str
+) -> None:
     config = _load(tmp_path)
-    provider = ScriptedProvider([ProviderError("Provider returned HTTP 503.")])
+    error = ProviderError("Provider returned HTTP 503.")
+    if failing_stage == ASSESS_SPECIFICATION:
+        provider = ScriptedProvider([error])
+    else:
+        provider = ScriptedProvider(
+            [_valid_completion("Repository context assessment.")],
+            impact_responses=[error],
+        )
     updates: list = []
 
     with pytest.raises(ProviderError) as excinfo:
@@ -228,10 +368,11 @@ def test_provider_error_stops_before_impact_and_assembly(tmp_path: Path) -> None
         ):
             updates.append(update)  # noqa: PERF402
 
-    assert [name for update in updates for name in update] == [PREPARE_CONTEXT]
+    names = [name for update in updates for name in update]
+    assert names[0] == PREPARE_CONTEXT
+    assert ASSEMBLE_REPORT not in names
     assert type(excinfo.value) is ProviderError
     assert str(excinfo.value) == "Provider returned HTTP 503."
-    assert len(provider.prompts) == 1
 
 
 def test_langsmith_tracing_environment_is_ignored(

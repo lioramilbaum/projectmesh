@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 from urllib.error import HTTPError
 
@@ -51,9 +52,11 @@ def _section(report, heading):
 class StubProvider(CompletionProvider):
     def __init__(self) -> None:
         self.prompts: list[tuple[str, str]] = []
+        self._lock = threading.Lock()
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
-        self.prompts.append((system_prompt, user_prompt))
+        with self._lock:
+            self.prompts.append((system_prompt, user_prompt))
         if "Capability: Repository context" in user_prompt:
             result = {
                 "summary": "The service describes its record storage.",
@@ -122,7 +125,8 @@ class GitHubStubProvider(StubProvider):
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         if "GitHub activity for acme/widgets" not in user_prompt:
             return super().complete(system_prompt, user_prompt)
-        self.prompts.append((system_prompt, user_prompt))
+        with self._lock:
+            self.prompts.append((system_prompt, user_prompt))
         result = {
             "summary": "Login problems are tracked in GitHub issues.",
             "problem_statement": "Users cannot log in.",
@@ -171,13 +175,36 @@ class SecretEchoProvider(StubProvider):
 
 
 class ScriptedProvider(CompletionProvider):
-    def __init__(self, responses: list[str | ProviderError]) -> None:
+    """Routes implementation-impact prompts to their own script.
+
+    Both analyses may call the provider concurrently, so routing and pops are
+    guarded by a lock.
+    """
+
+    def __init__(
+        self,
+        responses: list[str | ProviderError],
+        impact_responses: list[str | ProviderError] | None = None,
+    ) -> None:
         self.responses = responses
+        self.impact_responses = impact_responses
         self.prompts: list[tuple[str, str]] = []
+        self.impact_prompts: list[tuple[str, str]] = []
+        self._lock = threading.Lock()
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
-        self.prompts.append((system_prompt, user_prompt))
-        response = self.responses.pop(0)
+        with self._lock:
+            if "Capability: Implementation impact" in user_prompt:
+                self.impact_prompts.append((system_prompt, user_prompt))
+                if self.impact_responses is None:
+                    response: str | ProviderError = _valid_completion(
+                        "Implementation impact assessment."
+                    )
+                else:
+                    response = self.impact_responses.pop(0)
+            else:
+                self.prompts.append((system_prompt, user_prompt))
+                response = self.responses.pop(0)
         if isinstance(response, ProviderError):
             raise response
         return response
@@ -275,6 +302,7 @@ def test_generates_traceable_report_and_keeps_fixture_unchanged(
     ):
         assert heading in report
     assert "- Model: `fixture-model`" in report
+    assert "- Analysis providers:" in report
     assert f"- Prompt version: `{PROMPT_VERSION}`" in report
     assert f"- Source SHA-256: `{source_sha}`" in report
     assert (
@@ -311,8 +339,16 @@ def test_generates_traceable_report_and_keeps_fixture_unchanged(
         report, "Unsupported claims"
     )
     assert len(provider.prompts) == 2
-    assert provider.prompts[0][1].index("Capability: Repository context") < 100
-    assert "Capability: Implementation impact" in provider.prompts[1][1]
+    spec_prompt = next(
+        user for _, user in provider.prompts if "Capability: Repository context" in user
+    )
+    impact_prompt = next(
+        user
+        for _, user in provider.prompts
+        if "Capability: Implementation impact" in user
+    )
+    assert spec_prompt.index("Capability: Repository context") < 100
+    assert "Capability: Implementation impact" in impact_prompt
     assert _tree_bytes(project) == original
     assert report_path.parent == config.output_dir
 
@@ -326,7 +362,6 @@ def test_recovers_from_invalid_completion_with_one_correction_attempt(
         [
             json.dumps({"summary": 42}),
             _valid_completion("Recovered repository assessment."),
-            _valid_completion("Implementation impact assessment."),
         ]
     )
 
@@ -338,7 +373,7 @@ def test_recovers_from_invalid_completion_with_one_correction_attempt(
         provider_factory=lambda _: provider,
     )
 
-    assert len(provider.prompts) == 3
+    assert len(provider.prompts) == 2
     correction_prompt = provider.prompts[1][1]
     assert "Correction required" in correction_prompt
     assert "field 'summary' must be a string" in correction_prompt
@@ -358,7 +393,6 @@ def test_recovers_from_completion_missing_required_field(
         [
             json.dumps(incomplete),
             _valid_completion("Corrected repository assessment."),
-            _valid_completion("Implementation impact assessment."),
         ]
     )
 
@@ -370,7 +404,7 @@ def test_recovers_from_completion_missing_required_field(
         provider_factory=lambda _: provider,
     )
 
-    assert len(provider.prompts) == 3
+    assert len(provider.prompts) == 2
     correction_prompt = provider.prompts[1][1]
     assert "Correction required" in correction_prompt
     assert "field 'risks' must be a list" in correction_prompt
@@ -605,7 +639,12 @@ def test_github_evidence_is_cited_with_item_url(
     assert "GitHub evidence SHA-256" in traceability
     assert "GitHub repository: `acme/widgets`" in _section(report, "Metadata")
     assert f"- Prompt version: `{PROMPT_VERSION}+github-v1`" in report
-    assert "GitHub activity" not in provider.prompts[1][1]
+    impact_prompt = next(
+        user
+        for _, user in provider.prompts
+        if "Capability: Implementation impact" in user
+    )
+    assert "GitHub activity" not in impact_prompt
     for system_prompt, user_prompt in provider.prompts:
         assert "test-tok" not in system_prompt + user_prompt
     assert "test-tok" not in report
@@ -658,3 +697,48 @@ def test_github_failure_aborts_before_provider_and_writes_no_report(
 
     assert provider.prompts == []
     assert not config.output_dir.exists()
+
+
+def test_per_analysis_provider_is_used_and_recorded_in_metadata(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    config_path = _config_file(tmp_path, project)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + '\n[agents.code_analysis]\nmodel = "impact-model"\n',
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    stubs: dict[str, StubProvider] = {}
+    created: list[str] = []
+
+    def provider_factory(cfg):
+        created.append(cfg.model)
+        if cfg.model not in stubs:
+            stubs[cfg.model] = StubProvider()
+        return stubs[cfg.model]
+
+    report_path = run_assessment(
+        config=config,
+        project_key="fixture",
+        feature_request="Export archived records",
+        output_dir=config.output_dir,
+        provider_factory=provider_factory,
+    )
+
+    assert len(created) == 2
+    spec_stub = stubs["fixture-model"]
+    impact_stub = stubs["impact-model"]
+    assert spec_stub.prompts
+    assert all(
+        "Capability: Repository context" in user for _, user in spec_stub.prompts
+    )
+    assert impact_stub.prompts
+    assert all(
+        "Capability: Implementation impact" in user for _, user in impact_stub.prompts
+    )
+    report = report_path.read_text(encoding="utf-8")
+    assert "- Model: `fixture-model`" in report
+    assert "Repository context and feature fit: model `fixture-model`" in report
+    assert "Implementation impact: model `impact-model`" in report

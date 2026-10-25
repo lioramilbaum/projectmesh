@@ -23,3 +23,13 @@ output_dir = "../projectmesh-assessments"
 # type            = "claude-cli"
 # model           = "sonnet"
 # timeout_seconds = 300
+
+# Optional: route one analysis to a different model. Unset keys inherit from
+# [provider] when the type matches; switching type starts from the override.
+# [agents.code_analysis]
+# model = "opus"
+#
+# [agents.spec_analysis]
+# type            = "claude-cli"
+# model           = "sonnet"
+# timeout_seconds = 300

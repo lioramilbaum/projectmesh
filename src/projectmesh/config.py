@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from projectmesh.models import (
+    ANALYSIS_CAPABILITIES,
     AppConfig,
     ProjectConfig,
     ProviderConfig,
@@ -69,6 +70,79 @@ def _resolve_path(value: str, base: Path) -> Path:
     return path.resolve()
 
 
+def _provider_config(table: dict[str, object], location: str) -> ProviderConfig:
+    provider_type = table.get("type", PROVIDER_OPENAI_COMPATIBLE)
+    if not isinstance(provider_type, str) or provider_type not in {
+        PROVIDER_OPENAI_COMPATIBLE,
+        PROVIDER_CLAUDE_CLI,
+    }:
+        raise ConfigError(
+            f"'{location}.type' must be one of: 'openai-compatible', 'claude-cli'."
+        )
+    if provider_type == PROVIDER_CLAUDE_CLI:
+        _reject_unknown_keys(
+            table,
+            {"type", "model", "timeout_seconds"},
+            location,
+        )
+        endpoint = ""
+        api_key_env = ""
+        model = _required_string(table, "model", location)
+        default_timeout = 300
+    else:
+        _reject_unknown_keys(
+            table,
+            {"type", "endpoint", "model", "api_key_env", "timeout_seconds"},
+            location,
+        )
+        endpoint = _required_string(table, "endpoint", location)
+        parsed_endpoint = urlparse(endpoint)
+        if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
+            raise ConfigError(f"'{location}.endpoint' must be an absolute HTTP(S) URL.")
+        model = _required_string(table, "model", location)
+        api_key_env = _required_string(table, "api_key_env", location)
+        default_timeout = 60
+    timeout_seconds = table.get("timeout_seconds", default_timeout)
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or timeout_seconds <= 0
+    ):
+        raise ConfigError(f"'{location}.timeout_seconds' must be a positive integer.")
+    return ProviderConfig(
+        endpoint=endpoint,
+        model=model,
+        api_key_env=api_key_env,
+        timeout_seconds=timeout_seconds,
+        type=provider_type,
+    )
+
+
+def _agent_providers(
+    raw_agents: object,
+    provider_table: dict[str, object],
+    default: ProviderConfig,
+) -> dict[str, ProviderConfig]:
+    """Resolve [agents.<capability>] overrides against the global provider table.
+
+    An override with the same type as the default inherits its unset settings;
+    switching type starts from the override alone.
+    """
+    if raw_agents is None:
+        return {}
+    agents = _table(raw_agents, "agents")
+    _reject_unknown_keys(agents, set(ANALYSIS_CAPABILITIES), "agents")
+    providers: dict[str, ProviderConfig] = {}
+    for name, raw in agents.items():
+        override = _table(raw, f"agents.{name}")
+        if override.get("type", default.type) == default.type:
+            merged = {**provider_table, **override}
+        else:
+            merged = dict(override)
+        providers[name] = _provider_config(merged, f"agents.{name}")
+    return providers
+
+
 def load_config(path: str | Path) -> AppConfig:
     """Load a TOML configuration file and validate its project checkouts."""
     config_path = Path(path).expanduser().resolve()
@@ -82,53 +156,10 @@ def load_config(path: str | Path) -> AppConfig:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Invalid TOML in {config_path}: {exc}") from exc
 
-    _reject_unknown_keys(raw, {"provider", "projects", "assessment"}, "root")
+    _reject_unknown_keys(raw, {"provider", "projects", "assessment", "agents"}, "root")
     provider_table = _table(raw.get("provider"), "provider")
-    provider_type = provider_table.get("type", PROVIDER_OPENAI_COMPATIBLE)
-    if not isinstance(provider_type, str) or provider_type not in {
-        PROVIDER_OPENAI_COMPATIBLE,
-        PROVIDER_CLAUDE_CLI,
-    }:
-        raise ConfigError(
-            "'provider.type' must be one of: 'openai-compatible', 'claude-cli'."
-        )
-    if provider_type == PROVIDER_CLAUDE_CLI:
-        _reject_unknown_keys(
-            provider_table,
-            {"type", "model", "timeout_seconds"},
-            "provider",
-        )
-        endpoint = ""
-        api_key_env = ""
-        model = _required_string(provider_table, "model", "provider")
-        default_timeout = 300
-    else:
-        _reject_unknown_keys(
-            provider_table,
-            {"type", "endpoint", "model", "api_key_env", "timeout_seconds"},
-            "provider",
-        )
-        endpoint = _required_string(provider_table, "endpoint", "provider")
-        parsed_endpoint = urlparse(endpoint)
-        if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
-            raise ConfigError("'provider.endpoint' must be an absolute HTTP(S) URL.")
-        model = _required_string(provider_table, "model", "provider")
-        api_key_env = _required_string(provider_table, "api_key_env", "provider")
-        default_timeout = 60
-    timeout_seconds = provider_table.get("timeout_seconds", default_timeout)
-    if (
-        not isinstance(timeout_seconds, int)
-        or isinstance(timeout_seconds, bool)
-        or timeout_seconds <= 0
-    ):
-        raise ConfigError("'provider.timeout_seconds' must be a positive integer.")
-    provider = ProviderConfig(
-        endpoint=endpoint,
-        model=model,
-        api_key_env=api_key_env,
-        timeout_seconds=timeout_seconds,
-        type=provider_type,
-    )
+    provider = _provider_config(provider_table, "provider")
+    analysis_providers = _agent_providers(raw.get("agents"), provider_table, provider)
 
     projects_table = _table(raw.get("projects"), "projects")
     if not projects_table:
@@ -162,4 +193,9 @@ def load_config(path: str | Path) -> AppConfig:
     if not isinstance(output_value, str) or not output_value.strip():
         raise ConfigError("'assessment.output_dir' must be a non-empty string.")
     output_dir = _resolve_path(output_value, config_path.parent)
-    return AppConfig(projects=projects, provider=provider, output_dir=output_dir)
+    return AppConfig(
+        projects=projects,
+        provider=provider,
+        output_dir=output_dir,
+        analysis_providers=analysis_providers,
+    )

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from projectmesh.analysis import analyze
-from projectmesh.models import AnalysisResult, GitHubSnapshot, RepositorySnapshot
+from projectmesh.models import (
+    SPEC_ANALYSIS,
+    AnalysisResult,
+    GitHubSnapshot,
+    RepositorySnapshot,
+)
 from projectmesh.provider import CompletionProvider
 
 
@@ -15,7 +20,7 @@ def analyze_spec(
 ) -> AnalysisResult:
     """Assess feature fit against documented repository context."""
     return analyze(
-        capability="spec_analysis",
+        capability=SPEC_ANALYSIS,
         title="Repository context and feature fit",
         purpose=(
             "Identify relevant existing components, interfaces, and patterns, "

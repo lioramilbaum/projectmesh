@@ -89,6 +89,16 @@ def _github_metadata(assessment: Assessment) -> str:
     return f"- GitHub repository: `{assessment.github.repo}`\n"
 
 
+def _analysis_provider_metadata(assessment: Assessment) -> str:
+    lines = ["- Analysis providers:"]
+    lines += [
+        f"  - {prov.title}: model `{prov.model}`, "
+        f"provider `{_sanitize_endpoint(prov.provider_endpoint)}`"
+        for prov in assessment.analysis_providers
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def render_markdown(
     assessment: Assessment, generated_at: datetime | None = None
 ) -> str:
@@ -208,5 +218,5 @@ def render_markdown(
 - Prompt version: `{assessment.prompt_version}`
 - Source SHA-256: `{assessment.source_sha}`
 - Provider endpoint: `{_sanitize_endpoint(assessment.provider_endpoint)}`
-{_github_metadata(assessment)}- Generated at: `{generated_at.astimezone(timezone.utc).isoformat()}`
+{_analysis_provider_metadata(assessment)}{_github_metadata(assessment)}- Generated at: `{generated_at.astimezone(timezone.utc).isoformat()}`
 """

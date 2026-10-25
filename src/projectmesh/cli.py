@@ -15,7 +15,7 @@ from pathlib import Path
 from projectmesh.config import ConfigError, load_config
 from projectmesh.github import GitHubError
 from projectmesh.models import AppConfig, ProviderConfig
-from projectmesh.orchestrator import run_assessment_workflow
+from projectmesh.orchestrator import AnalysisProvider, run_assessment_workflow
 from projectmesh.provider import CompletionProvider, ProviderError, create_provider
 
 ProviderFactory = Callable[[ProviderConfig], CompletionProvider]
@@ -127,12 +127,24 @@ def run_assessment(
     _validate_output_dir(output_dir, config)
     report_path = output_dir / _report_filename(project_key, feature_request.strip())
     _validate_report_path(report_path, config)
-    provider = provider_factory(config.provider)
+    # Identical provider configs share one client, so each is built only once.
+    memo: dict[ProviderConfig, CompletionProvider] = {}
+
+    def get_provider(cfg: ProviderConfig) -> CompletionProvider:
+        if cfg not in memo:
+            memo[cfg] = provider_factory(cfg)
+        return memo[cfg]
+
+    analysis_providers = {
+        capability: AnalysisProvider(cfg, get_provider(cfg))
+        for capability, cfg in config.analysis_providers.items()
+    }
     final_state = run_assessment_workflow(
         project=config.projects[project_key],
         feature_request=feature_request.strip(),
         provider_config=config.provider,
-        provider=provider,
+        provider=get_provider(config.provider),
+        analysis_providers=analysis_providers,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_report(report_path, final_state["report_markdown"], config)
