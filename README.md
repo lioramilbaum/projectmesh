@@ -107,6 +107,54 @@ export GITHUB_TOKEN="..."
   never writes to GitHub.
 - Projects without `github_repo` make no GitHub requests.
 
+### Routing analyses to different models
+
+Each analysis can use its own model. Add an `[agents.<capability>]` table, where
+the capability is `spec_analysis` (repository context and feature fit) or
+`code_analysis` (implementation impact). Settings you leave out are inherited
+from `[provider]`:
+
+```toml
+[provider]
+type            = "claude-cli"
+model           = "sonnet"
+timeout_seconds = 300
+
+[agents.code_analysis]
+model = "opus"
+```
+
+Here the implementation-impact analysis uses `opus` with the same claude-cli
+settings, and the repository-context analysis uses `[provider]` unchanged.
+
+To use a different provider type for one analysis, set `type` in its table.
+Switching type does not inherit anything: the table must supply every setting
+that type needs.
+
+```toml
+[provider]
+type            = "claude-cli"
+model           = "sonnet"
+
+[agents.spec_analysis]
+type        = "openai-compatible"
+endpoint    = "https://api.openai.com/v1/chat/completions"
+model       = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+```
+
+- Only `spec_analysis` and `code_analysis` are accepted as table names.
+- An override with the same `type` as `[provider]` inherits its unset settings,
+  including `timeout_seconds`.
+- An override with a different `type` starts from its own settings, so
+  `timeout_seconds` takes that type's default (60 for `openai-compatible`, 300
+  for `claude-cli`).
+- An analysis without a table uses `[provider]`.
+- The report metadata lists the model and endpoint each analysis used. This
+  block always appears in every report, whether or not you configured overrides.
+- Both analyses run concurrently, so two provider calls can be in flight at the
+  same time. Check that your provider or subscription allows this.
+
 Run an assessment:
 
 ```sh

@@ -73,6 +73,87 @@ output_dir = "reports"
     assert config.provider.model == "sonnet"
 
 
+def test_loads_agent_model_override_inheriting_provider_settings(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "service").mkdir()
+    config_file = _write_config(
+        tmp_path / "projects.toml",
+        """
+[provider]
+type = "claude-cli"
+model = "sonnet"
+timeout_seconds = 300
+
+[agents.code_analysis]
+model = "opus"
+
+[projects.x]
+name = "X"
+path = "service"
+""",
+    )
+
+    config = load_config(config_file)
+
+    code = config.provider_for("code_analysis")
+    assert code.type == "claude-cli"
+    assert code.model == "opus"
+    assert code.timeout_seconds == 300
+    assert config.provider_for("spec_analysis") == config.provider
+
+
+def test_agent_type_switch_does_not_inherit(tmp_path: Path) -> None:
+    (tmp_path / "service").mkdir()
+    config_file = _write_config(
+        tmp_path / "projects.toml",
+        """
+[provider]
+type = "claude-cli"
+model = "sonnet"
+timeout_seconds = 300
+
+[agents.spec_analysis]
+type = "openai-compatible"
+endpoint = "https://spec.test/v1/chat/completions"
+model = "spec-model"
+api_key_env = "SPEC_API_KEY"
+
+[projects.x]
+name = "X"
+path = "service"
+""",
+    )
+
+    config = load_config(config_file)
+
+    spec = config.provider_for("spec_analysis")
+    assert spec.type == "openai-compatible"
+    assert spec.timeout_seconds == 60
+    assert spec.endpoint == "https://spec.test/v1/chat/completions"
+
+
+def test_config_without_agents_is_unchanged(tmp_path: Path) -> None:
+    (tmp_path / "service").mkdir()
+    config_file = _write_config(
+        tmp_path / "projects.toml",
+        """
+[provider]
+endpoint = "https://example.test/v1/chat/completions"
+model = "test-model"
+api_key_env = "TEST_API_KEY"
+
+[projects.x]
+name = "X"
+path = "service"
+""",
+    )
+
+    config = load_config(config_file)
+
+    assert config.analysis_providers == {}
+
+
 def test_loads_optional_github_repo(tmp_path: Path) -> None:
     (tmp_path / "service").mkdir()
     (tmp_path / "library").mkdir()
@@ -195,6 +276,47 @@ path = "library"
                 'github_repo = 5\n'
             ),
             "github_repo",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[agents.security]\nmodel = "m"\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
+            "Unknown setting.*in 'agents'",
+        ),
+        (
+            (
+                'agents = 5\n[provider]\nendpoint = "https://example.test"\n'
+                'model = "m"\napi_key_env = "KEY"\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
+            "'agents' must be a TOML table",
+        ),
+        (
+            (
+                '[provider]\ntype = "claude-cli"\nmodel = "sonnet"\n'
+                '[agents.spec_analysis]\ntype = "openai-compatible"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
+            "'agents.spec_analysis.endpoint' must be a non-empty string",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[agents.code_analysis]\nbogus = 1\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
+            "Unknown setting.*in 'agents.code_analysis'",
+        ),
+        (
+            (
+                '[provider]\nendpoint = "https://example.test"\nmodel = "m"\n'
+                'api_key_env = "KEY"\n[agents.code_analysis]\ntimeout_seconds = 0\n'
+                '[projects.p]\nname = "P"\npath = "."\n'
+            ),
+            "'agents.code_analysis.timeout_seconds' must be a positive integer",
         ),
     ],
 )

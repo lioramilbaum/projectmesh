@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from projectmesh.analysis import analyze
-from projectmesh.models import AnalysisResult, RepositorySnapshot
+from projectmesh.models import CODE_ANALYSIS, AnalysisResult, RepositorySnapshot
 from projectmesh.provider import CompletionProvider
 
 
@@ -14,7 +14,7 @@ def analyze_code(
 ) -> AnalysisResult:
     """Assess likely code impact, risks, and implementation questions."""
     return analyze(
-        capability="code_analysis",
+        capability=CODE_ANALYSIS,
         title="Implementation impact",
         purpose=(
             "Outline likely affected areas, dependencies, risks, and open "
