@@ -10,13 +10,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "langgraph==1.2.18",
-    "langsmith==0.14.14",
+    "langgraph==1.2.19",
+    "langsmith==0.14.16",
 ]
 
 [dependency-groups]
 dev = [
-    "langchain-core==1.7.0",
+    "langchain-core==1.7.3",
     "pytest==9.2.0",
 ]
 
